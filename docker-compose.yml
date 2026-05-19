@@ -65,6 +65,26 @@ services:
   #   image: postgres:16-alpine
   #   restart: unless-stopped
   # ...
+ # ── MySQL Database  ───────────────────────────
+  # Container MySQL lưu users + mission_logs.
+  # Dữ liệu persist qua restart nhờ named volume "db_data".
+  database:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_secret       # Password root (just for internal)
+      MYSQL_DATABASE: gcs_db                 # create  database "gcs_db" when initiate 
+      MYSQL_USER: gcs                        # User for backend
+      MYSQL_PASSWORD: gcs_pass               # Password for backend
+    volumes:
+      - db_data:/var/lib/mysql               # Persist data through restart
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "gcs", "-pgcs_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
 
   # ── FastAPI backend ───────────────────────────────────────────────────
   #
@@ -96,6 +116,8 @@ services:
       # Inside Docker's network, services reach each other by service name.
       # So "http://robot-api:5000" resolves to the robot-api container.
       ROBOT_API_URL: "http://robot-api:5000"
+      DATABASE_URL:  "mysql+pymysql://gcs:gcs_pass@database:3306/gcs_db" # for databse 
+      JWT_SECRET:    "${JWT_SECRET:-gcs-dev-secret-change-in-production}"  # jwt token for auth
       LOG_LEVEL:     "${LOG_LEVEL:-info}"
 
     # "depends_on" controls start *order*. Without it, Compose may start
@@ -149,6 +171,7 @@ services:
 # Named volumes persist data OUTSIDE the container's filesystem, so
 # database data survives container restarts and re-creates.
 # Uncomment when you enable the database service above.
-# volumes:
-#   db_data:          # uncomment when database service is enabled
-#     name: gcs_db_data
+volumes:
+   db_data:          # uncomment when database service is enabled
+     name: gcs_db_data
+
