@@ -135,7 +135,6 @@ class RobotClient:
                     response.raise_for_status()
                 # success - mark connected and return data
                 self.connection.notify("connected")
-                self.connection.notify("connected")
                 return response.json()
  
             except httpx.HTTPStatusError as exc:
@@ -191,11 +190,7 @@ class RobotClient:
     # get_sensor ()
     async def get_sensor(self) -> dict[str, Any]:
         """GET /api/sensor → proximity + lidar."""
-        return await self._request_with_retr
-
-
-
-
+        return await self._request_with_retry("GET", "/api/sensor")
 
 # Module-level singleton used by main.py
 robot = RobotClient()
