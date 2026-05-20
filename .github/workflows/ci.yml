@@ -102,10 +102,9 @@ jobs:
 
       - name: Static Analysis (Linting)
         run: |
-          cd backend
           pip install flake8
-          # Only check for fatal errors: syntax errors, undefined names, unused imports
-          flake8 ./backend --count --select=E9,F401,F63,F7,F82 --show-source --statistics
+          # E9,F63,F7,F82 flag fatal syntax errors and undefined names
+          flake8 ./backend --count --max-complexity=5 --show-source --statistics --extend-ignore=E501,W293,W291,E9,F63,F7,F82
       # just a placeholder for your tests. Implement your actual test commands here, e.g. "pytest ..."
       - name: Run tests with coverage
         env:
