@@ -110,7 +110,7 @@ jobs:
         env:
           DATABASE_URL: "sqlite:///./test.db"
           JWT_SECRET: "ci-test-secret"
-          PYTHONPATH: "."
+          PYTHONPATH: "backend
         run: |
           cd backend
           pip install -r requirements.txt
