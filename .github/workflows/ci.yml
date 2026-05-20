@@ -102,6 +102,7 @@ jobs:
 
       - name: Static Analysis (Linting)
         run: |
+          cd backend
           pip install flake8
           # Only check for fatal errors: syntax errors, undefined names, unused imports
           flake8 ./backend --count --select=E9,F401,F63,F7,F82 --show-source --statistics
