@@ -21,12 +21,13 @@ name: CI — Build, Test & Push
 #
 #   pull_request → branches: [main]
 #     Run every time a pull request that targets main is opened or updated.
-#     This lets reviewers see test results before approving a merge.
+#     This lets reviewers see test results before approving a merge.  # check before let someone can push into main brach 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
 
 # ── Concurrency guard ─────────────────────────────────────────────────────────
 # If two runs are triggered for the same branch almost simultaneously (e.g. two
@@ -106,8 +107,13 @@ jobs:
           flake8 ./backend --count --max-complexity=5 --show-source --statistics --extend-ignore=E501,W293,W291
       # just a placeholder for your tests. Implement your actual test commands here, e.g. "pytest ..."
       - name: Run tests with coverage
+        env:
+          DATABASE_URL: "sqlite:///./test.db"
+          JWT_SECRET: "ci-test-secret"
         run: |
-          true
+          cd backend
+          pip install -r requirements.txt
+          pytest tests/ -v --tb=short --cov=. --cov-report=term-missing
 
 
 
@@ -193,6 +199,11 @@ jobs:
         run: |
           curl -sf http://localhost:8080/health \
           || (docker compose logs backend && exit 1)
+
+      - name: Run tests inside backend container
+        run: |
+          docker compose exec -T backend \
+            pytest tests/ -v --tb=short
 
       # ── Dump diagnostic information ───────────────────────────────────────
       # "if: always()" means this step runs regardless of whether earlier steps
