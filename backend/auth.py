@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from fastapi import Request
  
-from database import get_db, User, init_db
+from database import get_db, User
 
 logger = logging.getLogger(__name__)
  
@@ -200,7 +200,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     Security: uses generic error message "Invalid username or password"
     for BOTH wrong username and wrong password — prevents enumeration.
     """
-    user = db.query(User).filter(User.username == body.username).first() # find user by username 
+    user = db.query(User).filter(User.username == body.username).first() #find user by username 
  
     # Generic error for both "user not found" and "wrong password"
     if not user or not verify_password(body.password, user.password_hash): #Verify password with bcrypt -> if not fit -> flag error

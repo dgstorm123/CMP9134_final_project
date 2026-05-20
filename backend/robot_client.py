@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 from typing import Any, Callable 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 
