@@ -14,12 +14,17 @@ Bảng dữ liệu:
   - users: username, password_hash, role, created_at
   - mission_logs: id, timestamp, username, command_type, params, result, ...
 """
+
 import os
 import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float,
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Float,
     DateTime,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -30,8 +35,7 @@ logger = logging.getLogger(__name__)
 # docker-compose.yml truyền: DATABASE_URL=mysql+pymysql://gcs:gcs_pass@database:3306/gcs_db
 # Khi chạy local có thể dùng SQLite fallback
 DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite:///./gcs_local.db"  # Fallback nếu không có MySQL
+    "DATABASE_URL", "sqlite:///./gcs_local.db"  # Fallback nếu không có MySQL
 )
 
 # ── Tạo SQLAlchemy engine ─────────────────────────────────
@@ -63,7 +67,8 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-    role = Column(String(20), nullable=False, default="Viewer")  # Commander | Viewer
+    role = Column(String(20), nullable=False,
+                  default="Viewer")  # Commander | Viewer
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -79,8 +84,8 @@ class MissionLog(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     username = Column(String(50), nullable=False, index=True)
     command_type = Column(String(20), nullable=False)  # MOVE | RESET | STATUS
-    parameters = Column(String(200), default="")       # "x:5,y:3"
-    result = Column(String(200), default="")           # success | stuck | failed
+    parameters = Column(String(200), default="")  # "x:5,y:3"
+    result = Column(String(200), default="")  # success | stuck | failed
     robot_battery = Column(Float, default=0.0)
     robot_x = Column(Integer, default=0)
     robot_y = Column(Integer, default=0)

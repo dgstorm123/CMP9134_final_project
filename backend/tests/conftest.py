@@ -1,4 +1,5 @@
 """Shared test fixtures — DB setup, teardown, auth helpers."""
+
 import os
 import pytest
 
@@ -16,10 +17,12 @@ _test_engine = create_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-_TestSession = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
+_TestSession = sessionmaker(
+    autocommit=False, autoflush=False, bind=_test_engine)
 
 # Patch database module BEFORE main.py imports it
 import database  # noqa: E402
+
 database.engine = _test_engine
 database.SessionLocal = _TestSession
 
@@ -57,28 +60,28 @@ def client():
 @pytest.fixture
 def commander_token(client):
     """Register + promote to Commander + login → return token."""
-    client.post("/api/auth/register", json={
-        "username": "testcmdr", "password": "pass1234"
-    })
+    client.post(
+        "/api/auth/register", json={"username": "testcmdr", "password": "pass1234"}
+    )
     # Promote to Commander via direct DB (register always creates Viewer)
     db = _TestSession()
     user = db.query(User).filter(User.username == "testcmdr").first()
     user.role = "Commander"
     db.commit()
     db.close()
-    r = client.post("/api/auth/login", json={
-        "username": "testcmdr", "password": "pass1234"
-    })
+    r = client.post(
+        "/api/auth/login", json={"username": "testcmdr", "password": "pass1234"}
+    )
     return r.json()["access_token"]
 
 
 @pytest.fixture
 def viewer_token(client):
     """Register as Viewer + login → return token."""
-    client.post("/api/auth/register", json={
-        "username": "testviewer", "password": "pass1234"
-    })
-    r = client.post("/api/auth/login", json={
-        "username": "testviewer", "password": "pass1234"
-    })
+    client.post(
+        "/api/auth/register", json={"username": "testviewer", "password": "pass1234"}
+    )
+    r = client.post(
+        "/api/auth/login", json={"username": "testviewer", "password": "pass1234"}
+    )
     return r.json()["access_token"]

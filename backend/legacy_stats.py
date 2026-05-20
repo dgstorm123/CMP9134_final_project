@@ -32,13 +32,17 @@ PAYLOAD_PENALTY_RATE: float = 0.1
 # ── Request Model ──────────────────────────────────────────
 class MissionStatsRequest(BaseModel):
     """Validated request body for mission stats calculation."""
+
     type: int = Field(..., description="Mission type: 1=recon, 2=transport")
-    dist: float = Field(..., ge=0, description="Distance travelled (non-negative)")
-    batt: float = Field(..., ge=0, description="Battery consumed (non-negative)")
+    dist: float = Field(..., ge=0,
+                        description="Distance travelled (non-negative)")
+    batt: float = Field(..., ge=0,
+                        description="Battery consumed (non-negative)")
     payload_weight: float = Field(0, ge=0, description="Payload weight in kg")
 
 
 # ── Pure functions ─────────────────────────────────────────
+
 
 def _compute_base_score(distance: float, battery: float, multiplier: float) -> float:
     """Calculate base mission score. Returns 0 for zero/negative inputs."""
@@ -60,6 +64,7 @@ def _cap_score(score: float) -> float:
 
 
 # ── API Endpoint ───────────────────────────────────────────
+
 
 @router.post("/api/mission_stats")
 def calc_stats(data: MissionStatsRequest):
@@ -83,7 +88,10 @@ def calc_stats(data: MissionStatsRequest):
 
     logger.info(
         "Mission stats: type=%s, score=%.2f, distance=%.1f, battery=%.1f",
-        mission_name, score, data.dist, data.batt,
+        mission_name,
+        score,
+        data.dist,
+        data.batt,
     )
 
     return {
