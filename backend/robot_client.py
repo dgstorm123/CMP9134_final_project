@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Callable 
+from typing import Any, Callable
 from dataclasses import dataclass
 
 import httpx
@@ -31,8 +31,10 @@ Retry Strategy:
   Handles transient 503 errors from the robot simulator's noise simulation.
 """
 
-class RobotConnectionError(Exception): # exception 
+
+class RobotConnectionError(Exception):  # exception
     """Raised when a request to the robot API fails."""
+
 
 @dataclass
 class RobotStatus:
@@ -42,16 +44,16 @@ class RobotStatus:
     battery: float = 100.0
     status: str = "IDLE"
     connected: bool = True
- 
+
     def is_low_battery(self) -> bool:
         return self.battery < 20.0
- 
+
     def is_dead(self) -> bool:
         return self.battery <= 0.0
- 
+
     def is_stuck(self) -> bool:
         return self.status == "STUCK"
- 
+
     @classmethod
     def from_dict(cls, data: dict) -> RobotStatus:
         pos = data.get("position", {})
@@ -63,16 +65,18 @@ class RobotStatus:
             status=data.get("status", "unknown"),
         )
 
-#### connection manager
+
+# connection manager
 class ConnectionManager:
     """Notifies subscribers when connection status changes."""
+
     def __init__(self):
         self._status: str = "disconnected"
         self._observers: list[Callable] = []
- 
+
     def subscribe(self, callback: Callable) -> None:
         self._observers.append(callback)
- 
+
     def notify(self, new_status: str) -> None:
         if new_status != self._status:
             old = self._status
@@ -80,13 +84,13 @@ class ConnectionManager:
             logger.info("Connection: %s → %s", old, new_status)
             for cb in self._observers:
                 cb(new_status)
- 
+
     def get_status(self) -> str:
         return self._status
- 
+
 
 class RobotClient:
-    """Minimal async HTTP client for the Virtual Robot API.   
+    """Minimal async HTTP client for the Virtual Robot API.
     Facade pattern: hides HTTP/retry complexity behind clean methods."""
 
     def __init__(self, base_url: str = ROBOT_API_URL) -> None:
@@ -95,94 +99,87 @@ class RobotClient:
         self.timeout: float = 5.0
         self.connection = ConnectionManager()
 
-# -------------------- retry logic ---------------------------------
-    async def _request_with_retry (self, method: str, path: str, **kwargs) -> dict[str, Any]:
+    # -------------------- retry logic ---------------------------------
+    async def _attempt_request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Helper to perform a single HTTP request."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.request(method, f"{self._base}{path}", **kwargs)
+            response.raise_for_status()
+            return response
 
-        """Send an HTTP request with exponential backoff retry.
-            Args:
-                method: HTTP method ("GET" or "POST")
-                path:   API path (e.g. "/api/status")
-                **kwargs: passed to httpx (json, params, etc.)
-    
-            Returns:
-                Parsed JSON response as a dict.
-    
-            Raises:
-                RobotConnectionError: after all retries are exhausted.
-    
-            Retry strategy:
-                Attempt 1: immediate
-                Attempt 2: wait 0.5s
-                Attempt 3: wait 1.0s
-                (exponential backoff: delay = 0.5 * 2^attempt)  
-        """
-        last_error = None 
-        for attempt in range (self.max_retries):
-            try: 
-                if attempt > 0:
-                    # backoff: 0,5s , 1s 
-                    delay = 0.5 * (2 ** (attempt - 1))
-                    self.connection.notify("reconnecting")
-                    logger.info(
-                        "Retry %d/%d for %s %s (waiting %.1fs)",
-                        attempt + 1, self.max_retries, method, path, delay,
-                    )
-                    await asyncio.sleep(delay)
+    async def _handle_request_error(self, exc: Exception, attempt: int) -> bool:
+        """Returns True if we should retry, False if we should abort."""
+        if isinstance(exc, httpx.HTTPStatusError):
+            if exc.response.status_code == 503:
+                logger.warning("Robot returned 503 (attempt %d)", attempt + 1)
+                return True
+            raise RobotConnectionError(
+                f"Robot API error {exc.response.status_code}: {exc}"
+            ) from exc
 
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.request(
-                        method, f"{self._base}{path}", **kwargs)
-                    response.raise_for_status()
-                # success - mark connected and return data
+        if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+            logger.warning("Connection failed (attempt %d): %s", attempt + 1, exc)
+            return True
+
+        logger.error("Unexpected error: %s", exc)
+        return False
+
+    async def _sleep_if_needed(self, attempt: int, method: str, path: str) -> None:
+        if attempt > 0:
+            delay = 0.5 * (2 ** (attempt - 1))
+            self.connection.notify("reconnecting")
+            logger.info(
+                "Retry %d/%d for %s %s (waiting %.1fs)",
+                attempt + 1,
+                self.max_retries,
+                method,
+                path,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    async def _request_with_retry(
+        self, method: str, path: str, **kwargs
+    ) -> dict[str, Any]:
+        """Send an HTTP request with exponential backoff retry."""
+        last_error = None
+        for attempt in range(self.max_retries):
+            await self._sleep_if_needed(attempt, method, path)
+
+            try:
+                response = await self._attempt_request(method, path, **kwargs)
                 self.connection.notify("connected")
                 return response.json()
- 
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                # 503 = transient outage from robot noise simulation → retry
-                if exc.response.status_code == 503:
-                    logger.warning("Robot returned 503 (attempt %d)", attempt + 1)
-                    continue
-                # Other HTTP errors (4xx) should not be retried
-                raise RobotConnectionError(
-                    f"Robot API error {exc.response.status_code}: {exc}"
-                ) from exc
- 
-            except (httpx.ConnectError, httpx.TimeoutException) as exc:
-                last_error = exc
-                logger.warning(
-                    "Connection failed (attempt %d): %s", attempt + 1, exc
-                )
-                continue
- 
             except Exception as exc:
                 last_error = exc
-                logger.error("Unexpected error: %s", exc)
-                break
- 
+                if not await self._handle_request_error(exc, attempt):
+                    break
+
         # All retries exhausted
         self.connection.notify("disconnected")
         raise RobotConnectionError(
             f"Robot unreachable after {self.max_retries} attempts: {last_error}"
         )
 
-# ---------------------- API methods -----------------------------        
-    # get status 
-    async def get_status(self) -> dict[str, Any]: # get status 
+    # ---------------------- API methods -----------------------------
+    # get status
+    async def get_status(self) -> dict[str, Any]:  # get status
         """Fetch current robot status (position, battery, state)."""
         return await self._request_with_retry("GET", "/api/status")
 
     # Move - POST
-    async def move(self, x: int, y: int) -> dict[str, Any]: # move 
+    async def move(self, x: int, y: int) -> dict[str, Any]:  # move
         """Send a move command to the robot."""
-        return await self._request_with_retry("POST", "/api/move", json = {"x":x, "y":y})
+        return await self._request_with_retry(
+            "POST", "/api/move", json={"x": x, "y": y}
+        )
 
-    # reset 
+    # reset
     async def reset(self) -> dict[str, Any]:
         """POST /api/reset → reset simulation."""
         return await self._request_with_retry("POST", "/api/reset")
 
-    #async def get_map()
+    # async def get_map()
     async def get_map(self) -> dict[str, Any]:
         """GET /api/map → 21×21 obstacle grid."""
         return await self._request_with_retry("GET", "/api/map")
@@ -192,6 +189,6 @@ class RobotClient:
         """GET /api/sensor → proximity + lidar."""
         return await self._request_with_retry("GET", "/api/sensor")
 
+
 # Module-level singleton used by main.py
 robot = RobotClient()
-
