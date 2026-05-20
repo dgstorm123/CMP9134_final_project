@@ -1,4 +1,3 @@
-import pytest
 from legacy_stats import _compute_base_score, _cap_score, MAX_SCORE
 from robot_client import RobotStatus
 

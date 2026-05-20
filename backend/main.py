@@ -28,19 +28,47 @@ From the `backend/` directory:
 
 Then visit http://localhost:8000/docs for the interactive API documentation
 that FastAPI generates automatically from your code (no extra work required).
+
+Integrates all modules:
+  - robot_client.py  → Facade for Robot API communication
+  - auth.py          → JWT authentication + RBAC
+  - database.py      → SQLAlchemy models + MySQL connection
+  - legacy_stats.py  → Mission statistics (to be refactored)
+ 
+Routes:
+  GET  /health          → Container health check
+  GET  /api/status      → Robot telemetry (authenticated)
+  POST /api/move        → Move robot (Commander only)
+  POST /api/reset       → Reset simulation (Commander only)
+  GET  /api/map         → Obstacle grid (authenticated)
+  GET  /api/sensor      → Proximity + lidar (authenticated)
+  GET  /api/logs        → Mission audit trail (authenticated)
+  WS   /ws/telemetry    → Live telemetry stream
+
 """
 
+
+import asyncio
 import logging
 import os
-
-from fastapi import FastAPI
+from datetime import datetime, timezone
+ 
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-
-# 1. ADD THIS IMPORT NEAR THE TOP:
-# This pulls the 'router' variable from the file you just created
-from legacy_stats import router as legacy_stats_router
-
+from sqlalchemy.orm import Session
+ 
+from database import init_db, get_db, SessionLocal, MissionLog
 from robot_client import robot, RobotConnectionError
+from auth import (
+    router as auth_router,
+    require_auth,
+    require_commander,
+    seed_default_users,
+)
+from legacy_stats import router as legacy_stats_router
+#THIS IMPORT NEAR THE TOP:
+# This pulls the 'router' variable from the file you just created
+
 
 # ── Configuration from environment variables ───────────────────────────────
 # os.getenv(key, default) reads a value from the process environment.
@@ -113,9 +141,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # 2. ADD THIS LINE ANYWHERE AFTER 'app = FastAPI(...)'
 # This physically attaches the bad code to your live server
 app.include_router(legacy_stats_router)
+
+# ── Register Routers ──────────────────────────────────────
+app.include_router(auth_router)
+
+
+# --- initiate event ----------------------------
+@app.on_event("startup")
+def on_startup():
+    """ initiate the database and seed defualts users"""
+    init_db()
+    db = SessionLocal()
+    try:
+        seed_default_users(db)
+    finally:
+      db.close()
+    logger.info("GCS backend started - ROBOT API: %s", ROBOT_API_URL)
+
+# Mission loggin helper 
+def _log_mission(                          
+    db: Session,
+    username: str,
+    command_type: str,
+    parameters: str = "",
+    result: str = "",
+    battery: float = 0.0,
+    x: int = 0,
+    y: int = 0,
+) -> None:
+    """Record a command in mission_logs table for audit trail."""
+    log = MissionLog(
+        timestamp=datetime.now(timezone.utc),
+        username=username,
+        command_type=command_type,
+        parameters=parameters,
+        result=result,
+        robot_battery=battery,
+        robot_x=x,
+        robot_y=y,
+    )
+    db.add(log)
+    db.commit()
 
 
 # ── Health check ───────────────────────────────────────────────────────────
@@ -162,8 +232,9 @@ def health():
 #
 # Returning {"error": str(exc)} gives the frontend a machine-readable message
 # instead of letting FastAPI produce an unhelpful 500 HTML page.
+
 @app.get("/api/status")
-async def get_status():
+async def get_status(user: dict = Depends(require_auth)):  # require auth to do this 
     """Return the current robot status (position, battery level, state).
 
     Proxies the request to the Virtual Robot API via ``robot_client.RobotClient``.
@@ -178,6 +249,90 @@ async def get_status():
         logger.warning("Could not reach robot API: %s", exc)
         return {"error": str(exc)}
 
+ # get api/map
+@app.get("/api/map")                                        
+async def get_map(user: dict = Depends(require_auth)):
+    try:
+        return await robot.get_map()
+    except RobotConnectionError as exc:
+        logger.warning("Map request failed: %s", exc)
+        return {"error": str(exc)}
+ 
+ # get api/sensor 
+@app.get("/api/sensor")                                     
+async def get_sensor(user: dict = Depends(require_auth)):
+    try:
+        return await robot.get_sensor()
+    except RobotConnectionError as exc:
+        logger.warning("Sensor request failed: %s", exc)
+        return {"error": str(exc)}
+
+# API/post move 
+@app.post("/api/move")
+async def move(x: int, y: int, user: dict = Depends(require_commander), db: Session = Depends(get_db),):
+    """Send the robot to position (x, y)."""
+    
+    if not (0 <= x <= 20 and 0 <= y <= 20):
+        return {"error": "Coordinates must be between 0 and 20"}
+
+    username = user["sub"]
+    try:
+        result = await robot.move(x, y)
+        _log_mission(db, username=username, command_type="MOVE",
+                     parameters=f"x:{x},y:{y}", result="success",
+                     battery=result.get("battery", 0), x=x, y=y)
+        return result
+    except RobotConnectionError as exc:
+        _log_mission(db, username=username, command_type="MOVE",
+                     parameters=f"x:{x},y:{y}", result=f"failed: {exc}")
+        logger.warning("Move command failed: %s", exc)
+        return {"error": str(exc)}
+
+# api post reset
+@app.post("/api/reset")                                     
+async def reset(
+    user: dict = Depends(require_commander),
+    db: Session = Depends(get_db),
+):
+    username = user["sub"]
+    try:
+        result = await robot.reset()
+        _log_mission(db, username=username, command_type="RESET", result="success")
+        return result
+    except RobotConnectionError as exc:
+        _log_mission(db, username=username, command_type="RESET", result=f"failed: {exc}")
+        logger.warning("Reset command failed: %s", exc)
+        return {"error": str(exc)}
+ 
+# api get logs
+@app.get("/api/logs")                                       
+def get_logs(
+    limit: int = 50,
+    user: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    limit = min(limit, 200)
+    logs = (
+        db.query(MissionLog)
+        .order_by(MissionLog.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": log.id,
+            "timestamp": log.timestamp.isoformat(),
+            "username": log.username,
+            "command_type": log.command_type,
+            "parameters": log.parameters,
+            "result": log.result,
+            "robot_battery": log.robot_battery,
+            "robot_x": log.robot_x,
+            "robot_y": log.robot_y,
+        }
+        for log in logs
+    ]
+ 
 
 # ── TODO: add your routes below ────────────────────────────────────────────
 # Use the skeletons below as starting points.  Each route should:
@@ -196,19 +351,21 @@ async def get_status():
 #         logger.warning("Move command failed: %s", exc)
 #         return {"error": str(exc)}
 #
-# @app.websocket("/ws/telemetry")
-# async def ws_telemetry(websocket: WebSocket):
-#     """Stream live sensor data to a connected browser client.
-#
-#     WebSockets maintain a persistent two-way connection, making them ideal
-#     for low-latency telemetry feeds (position, battery, sensor readings).
-#     Unlike HTTP, you don't need to poll — the server pushes updates.
-#     """
-#     await websocket.accept()
-#     try:
-#         while True:
-#             data = await robot.get_status()
-#             await websocket.send_json(data)
-#             await asyncio.sleep(0.5)   # push an update every 500 ms
-#     except WebSocketDisconnect:
-#         logger.info("Telemetry client disconnected")
+
+@app.websocket("/ws/telemetry")
+async def ws_telemetry(websocket: WebSocket):
+     """Stream live sensor data to a connected browser client.
+
+     WebSockets maintain a persistent two-way connection, making them ideal
+     for low-latency telemetry feeds (position, battery, sensor readings).
+     Unlike HTTP, you don't need to poll — the server pushes updates.
+     """
+     await websocket.accept()
+     try:
+         while True:
+             data = await robot.get_status()
+             await websocket.send_json(data)
+             await asyncio.sleep(0.5)    #push an update every 500 ms
+     except WebSocketDisconnect:
+         logger.info("Telemetry client disconnected")
+         

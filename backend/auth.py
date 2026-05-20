@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from fastapi import Request
  
-from database import get_db, User, init_db
+from database import get_db, User
 
 logger = logging.getLogger(__name__)
  
