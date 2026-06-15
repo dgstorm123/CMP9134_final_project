@@ -1,0 +1,55 @@
+# ================================================================
+# Docker Compose — Test Configuration
+# ================================================================
+# Extends the main docker-compose.yml with test-specific overrides.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test-runner
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+#
+# What this file does:
+#   1. Inherits ALL services from docker-compose.yml (robot-api, database, backend, frontend)
+#   2. Overrides backend to use "development" stage (includes pytest + dev tools)
+#   3. Adds a dedicated "test-runner" service that runs pytest then exits
+# ================================================================
+
+services:
+
+  # ── Override backend to use development stage ────────────
+  # The main compose uses target: production (no pytest installed).
+  # Here we switch to development stage which includes all test deps.
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    environment:
+      ROBOT_API_URL: "http://robot-api:5000"
+      DATABASE_URL: "mysql+pymysql://gcs:gcs_pass@database:3306/gcs_db"
+      JWT_SECRET: "test-secret-key"
+      LOG_LEVEL: "warning"
+
+  # ── Test runner — runs pytest then exits ─────────────────
+  # This container starts AFTER backend + database + robot-api are healthy,
+  # runs the full test suite, and exits with the test result code.
+  # Exit code 0 = all tests passed, non-zero = failure.
+  test-runner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    environment:
+      DATABASE_URL: "sqlite:///./test_runner.db"
+      JWT_SECRET: "test-secret-key"
+      LOG_LEVEL: "warning"
+    depends_on:
+      backend:
+        condition: service_healthy
+      robot-api:
+        condition: service_healthy
+    # Run pytest with verbose output and coverage report
+    command: >
+      pytest tests/ -v --tb=short --cov=. --cov-report=term-missing
+    # Container exits after pytest finishes (not a long-running service)
+    restart: "no"
